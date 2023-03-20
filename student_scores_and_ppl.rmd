@@ -1,0 +1,186 @@
+---
+title: "Text Gen in the Classroom"
+subtitle: "Understanding student essays in the CIC corpus"
+author: "Brighton Pauli"
+---
+
+# Imports and data
+
+```{r, message=FALSE}
+library("tidyverse")    # data wrangling and visualization
+library("magrittr")     # %>% pipe
+library("ggplot2")      # fancy data visualization
+library("lme4")         # linear mixed effects models
+library("forcats")      # reordering for bar plot
+
+data_dir <- "D:/data/claim_identification_corpus"
+```
+
+```{r}
+df <- "EssaysWithPPL.csv" %>%
+    sprintf("%s/%s", data_dir, .) %>%
+    read.csv
+df <- filter(df, LinePPL < 1000)
+glimpse(df)
+```
+
+```{r}
+valid_types <- c("Concluding_Summary", "Counterclaim", "Data", "Final_Claim",
+                 "Nonannotated", "Primary_Claim", "Rebuttal")
+df_annot <- "AnnotsWithPPL.csv" %>%
+    sprintf("%s/%s", data_dir, .) %>%
+    read.csv %>%
+    filter(ppl < 600) %>%
+    filter(adjudicated_discourse_type %in% valid_types)
+glimpse(df_annot)
+```
+
+# Entire Essays
+
+## Visualizing perplexity on its own
+
+```{r}
+hist(df$LinePPL)
+```
+
+## Directly comparing perplexity and scores
+
+Holistic score based solely on average line perplexity.
+
+```{r}
+score_ppl <- lm(Holistic.Score ~ LinePPL, data = df)
+summary(score_ppl)
+```
+
+```{r}
+ggplot(df, aes(LinePPL, Holistic.Score)) +
+geom_point()
+```
+
+Average line perplexity based on the total length. Colored by holistic score.
+
+```{r}
+length_ppl <- lm(LinePPL ~ Number.of.words, data = df)
+summary(length_ppl)
+```
+
+```{r}
+ggplot(df, aes(Number.of.words, LinePPL, color = Holistic.Score)) +
+geom_point() +
+scale_color_gradient2(low = "#1a1c37", mid = "#818285", high = "#fac864",
+    midpoint = 3) +
+geom_smooth(method = "lm", color = "#6496c8")
+```
+
+## Categorical scores and perplexities
+
+```{r}
+df <- df %>%
+    mutate(ppl_label = case_when(                LinePPL < 60 ~ "AI",
+                                 60 <= LinePPL & LinePPL < 80 ~ "Unsure",
+                                 80 <= LinePPL            ~ "Human"))
+glimpse(df)
+```
+
+```{r}
+df_summ <- df %>%
+    group_by(Holistic.Score, ppl_label) %>%
+    summarize(n = n()) %>%
+    mutate(freq = n / sum(n))
+df_summ$ppl_label <- factor(df_summ$ppl_label,
+                            c("AI", "Unsure", "Human"))
+glimpse(df_summ)
+```
+
+```{r}
+df_summ %>%
+ggplot(aes(x = Holistic.Score, fill = ppl_label, group = ppl_label)) +
+geom_bar(aes(y = freq), stat = "identity") +
+scale_fill_manual(values = c("#e85d75", "#818285", "#6469c8")) +
+labs(
+    x = "Holistic Score",
+    y = "Frequency",
+    fill = "GPTZero Label"
+) +
+ggtitle("Probability of False Positive by Holistic Score")
+```
+
+```{r}
+df_summ %>%
+ggplot(aes(x = ppl_label, fill = Holistic.Score, group = Holistic.Score)) +
+theme_light() +
+geom_bar(aes(y = freq), stat = "identity")
+```
+
+# Individual Annotations
+
+## Visualizing Perplexities
+
+```{r}
+hist(df_annot$ppl, breaks = 30, xlim = c(0, 150), xlab = "Perplexity",
+     main = "Histogram of Perplexities")
+```
+
+## Linear Regression
+
+```{r}
+lm(ppl ~ score, data = df_annot) %>%
+    summary
+```
+
+```{r}
+ggplot(df_annot, aes(x = score, y = ppl)) +
+geom_point() +
+geom_smooth(method = "lm") +
+xlab("Score") +
+ylab("Perplexity")
+```
+
+## Linear Mixed Effects Regression
+
+```{r}
+score_mixed <- lmer(
+    ppl ~ score + (1 | adjudicated_discourse_type),
+    data = df_annot)
+score_mixed
+```
+
+## Perplexity per Discourse Type
+
+Discourse elements should differ in perplexity. High-entropy elements like
+"Data" vary more than low-entropy elements like "Primary_Claim"s, since there
+should only be two types of primary claims ("I agree" or "I disagree"), but 
+there are countless potential examples.
+
+```{r}
+ggplot(df_annot,
+    aes(y = ppl, x = adjudicated_discourse_type,
+    fill = adjudicated_discourse_type)) +
+geom_boxplot() +
+theme(legend.position = "none") +
+xlab("Discourse Type") +
+ylab("Perplexity")
+```
+
+### With Violins
+
+```{r}
+df_annot %>%
+ggplot(aes(
+    y = ppl,
+    x = adjudicated_discourse_type,
+    fill = adjudicated_discourse_type)) +
+geom_boxplot() +
+geom_violin(alpha = 0.2, ) +
+theme(legend.position = "none") +
+xlab("Discourse Type") +
+ylab("Perplexity")
+```
+
+### Histogram of just Data
+
+```{r}
+df_annot %>%
+    filter(adjudicated_discourse_type == "Data") %>%
+    ggplot(aes(x = ppl)) + geom_histogram()
+```
